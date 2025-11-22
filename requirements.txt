@@ -1,0 +1,7 @@
+streamlit
+yt-dlp
+faster-whisper
+numpy
+python-dotenv
+requests
+tqdm
