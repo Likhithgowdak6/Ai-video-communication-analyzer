@@ -1,115 +1,89 @@
-# app.py (updated to match your utils filenames)
-import streamlit as st
+# app.py — Minimal stable Streamlit app
 import os
 import traceback
+import streamlit as st
 
-# import the functions that exist in your utils folder
-try:
-    from utils.download import download_audio
-except Exception:
-    download_audio = None
-
-try:
-    from utils.transcribe_local import transcribe_local
-except Exception:
-    transcribe_local = None
-
-try:
-    from utils.analysis_local_llm import analyze_transcript
-except Exception:
-    analyze_transcript = None
+from utils.download import download_audio
+from utils.transcribe_local import transcribe_local
+from utils.analysis_local_llm import analyze_transcript
 
 st.set_page_config(page_title="AI Video Communication Analyzer", layout="centered")
 st.title("🎙️ AI Video Communication Analyzer")
-st.write("Enter a YouTube video URL (or paste a local audio/video path). The app downloads audio, transcribes locally and shows Clarity, Focus, Summary.")
+st.write("Paste a YouTube URL or choose/upload a local audio/video file. "
+         "The app downloads/transcribes audio and shows Clarity, Focus, and Summary.")
 
-PLACEHOLDER = "https://www.youtube.com/watch?v=8FiEKMxZN0s"
+DEFAULT_URL = "https://www.youtube.com/watch?v=8FiEKMxZN0s"
+video_input = st.text_input("Video URL or Local File Path", placeholder=DEFAULT_URL)
 
-video_input = st.text_input("Video URL or local file path", placeholder=PLACEHOLDER)
+uploaded_file = st.file_uploader("Or upload an audio/video file (mp4,m4a,mp3,wav,webm)", type=["mp4","m4a","mp3","wav","webm"])
 
-if st.button("Analyze Video"):
-    if not video_input or not video_input.strip():
-        st.error("Please enter a URL or a valid local file path.")
-        st.stop()
+def safe_remove(path):
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except:
+        pass
 
-    # Verify required utils are available
-    if download_audio is None:
-        st.error("utils.download.download_audio not found. Check utils/download.py")
-        st.stop()
-    if transcribe_local is None:
-        st.error("utils.transcribe_local.transcribe_local not found. Check utils/transcribe_local.py")
-        st.stop()
-    if analyze_transcript is None:
-        st.error("utils.analysis_local_llm.analyze_transcript not found. Check utils/analysis_local_llm.py")
-        st.stop()
-
-    # Clean previous artifacts to avoid stale reuse
-    def safe_remove(path):
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
-
-    safe_remove("audio_input.m4a")
+if st.button("Analyze"):
+    # cleanup old artifacts
     safe_remove("transcript.txt")
+    safe_remove("uploaded_input")
 
-    st.info("Starting pipeline...")
-
-    # If local file path exists, use it directly (allow video or audio file)
-    if os.path.exists(video_input) and os.path.isfile(video_input):
-        st.write(f"Using local file: {video_input}")
-        audio_path = video_input
+    # pick audio source: uploaded file -> local path -> URL download
+    audio_path = None
+    if uploaded_file is not None:
+        # save uploaded file
+        with open("uploaded_input", "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        audio_path = os.path.abspath("uploaded_input")
+        st.success("Using uploaded file.")
+    elif video_input and os.path.exists(video_input) and os.path.isfile(video_input):
+        audio_path = os.path.abspath(video_input)
+        st.success(f"Using local file: {audio_path}")
     else:
-        # treat input as URL -> download audio
-        st.write("Detected input as URL. Downloading audio (bestaudio)...")
-        try:
-            # download_audio returns the downloaded audio filepath
-            audio_path = download_audio(video_input)
-            st.success(f"Audio downloaded: {audio_path}")
-        except Exception as e:
-            st.error("Audio download failed. See details below.")
-            st.text(traceback.format_exc())
+        # treat as URL
+        if not video_input or not video_input.strip():
+            st.error("Please provide a URL, a local path, or upload a file.")
             st.stop()
+        st.info("Downloading audio from URL...")
+        audio_path, err = download_audio(video_input)
+        if not audio_path:
+            st.error("Audio download failed.")
+            st.warning(str(err))
+            st.info("Options: upload a file, try a different URL, or enable Demo Mode.")
+            st.stop()
+        st.success(f"Audio downloaded: {audio_path}")
 
-    # Transcribe (always re-transcribe the chosen audio file)
-    st.write("Transcribing (local Whisper)... this may take time for large models.")
+    # transcribe
+    st.info("Transcribing audio (local Whisper)... this may take time.")
     try:
-        transcript_text = transcribe_local(audio_path)
-        # save transcript
+        transcript = transcribe_local(audio_path)
         with open("transcript.txt", "w", encoding="utf-8") as f:
-            f.write(transcript_text)
-        st.success("Transcription completed and saved to transcript.txt")
-    except Exception as e:
-        st.error("Transcription failed. See details below.")
-        st.text(traceback.format_exc())
-        st.stop()
-
-    # Analyze (clarity, focus, short summary)
-    st.write("Analyzing transcript for Clarity, Focus and Short Summary...")
-    try:
-        # prefer_hf False -> use local deterministic analysis by default
-        clarity, focus, summary, raw = analyze_transcript(transcript_text, prefer_hf=False)
-    except TypeError:
-        # older signature fallback
-        clarity, focus, summary, raw = analyze_transcript(transcript_text)
+            f.write(transcript)
+        st.success("Transcription completed.")
     except Exception:
-        st.error("Analysis failed. See details below.")
+        st.error("Transcription error — see debug below.")
         st.text(traceback.format_exc())
         st.stop()
 
-    # Display results
+    # analyze
+    st.info("Analyzing transcript...")
+    try:
+        clarity, focus, summary, meta = analyze_transcript(transcript)
+    except Exception:
+        st.error("Analysis failed.")
+        st.text(traceback.format_exc())
+        st.stop()
+
+    # show results
     st.subheader("📊 Results")
-    st.metric("Clarity Score (0–100)", f"{clarity}")
-    st.write("### 🎯 Communication Focus (one sentence)")
+    st.metric("Clarity Score (0–100)", clarity)
+    st.write("### 🎯 Communication Focus")
     st.write(focus)
-    st.write("### 📝 Short Summary (2–3 lines)")
+    st.write("### 📝 Short Summary")
     st.write(summary)
 
-    with st.expander("🔎 Raw/Debug Output"):
-        try:
-            st.json(raw)
-        except Exception:
-            st.text(str(raw))
+    with st.expander("🔎 Debug / Meta"):
+        st.json(meta)
         st.write("Audio used:", audio_path)
         st.write("Transcript file: transcript.txt")
