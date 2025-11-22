@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# env / virtualenv
+env/
+venv/
+.env
+.env.* 
+.envrc
+
+# editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# audio/video/transcripts & large data
+audio_input*.*
+input_video.*
+transcript*.txt
+*.mp4
+*.webm
+
+# model caches / checkpoints
+~/.cache/
+cache/
+model_cache/
