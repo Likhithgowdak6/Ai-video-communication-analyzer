@@ -1,81 +1,65 @@
-# utils/download.py — Minimal robust downloader
+# utils/download.py — compact downloader suitable for local deployment
 import os
 import subprocess
 import time
 from typing import Tuple
 
-def _is_remote(s: str) -> bool:
-    if not s:
-        return False
-    s = s.strip().lower()
-    return s.startswith("http://") or s.startswith("https://") or s.startswith("ftp://")
+AUDIO_EXTS = (".m4a", ".mp3", ".webm", ".wav", ".aac", ".opus", ".ogg")
 
-def _newest_audio_file_in_dir(out_dir: str, prefix="audio_input_"):
-    exts = [".m4a", ".mp3", ".webm", ".wav", ".aac", ".opus", ".ogg"]
-    cand = []
-    for fn in os.listdir(out_dir):
-        if fn.startswith(prefix) and any(fn.lower().endswith(ext) for ext in exts):
-            cand.append(os.path.join(out_dir, fn))
-    if not cand:
+def _is_url(s: str) -> bool:
+    return bool(s) and s.strip().lower().startswith(("http://", "https://", "ftp://"))
+
+def _find_newest_audio(out_dir: str = ".", prefix: str = "audio_input_"):
+    files = [os.path.join(out_dir, f) for f in os.listdir(out_dir)
+             if f.startswith(prefix) and f.lower().endswith(AUDIO_EXTS)]
+    if not files:
         return None
-    return os.path.abspath(sorted(cand, key=lambda p: os.path.getmtime(p), reverse=True)[0])
+    return max(files, key=os.path.getmtime)
 
-def download_audio(input_url_or_path: str, out_dir: str = ".", max_retries: int = 1, timeout: int = 600) -> Tuple[str, str]:
+def download_audio(input_path_or_url: str, out_dir: str = ".", timeout: int = 600) -> Tuple[str, str]:
     """
     Returns (filepath, None) on success or (None, error_message) on failure.
-    If input is a local existing file, returns it immediately.
+    Quick and safe for local usage.
     """
-    if not input_url_or_path:
+    if not input_path_or_url:
         return None, "No input provided."
-    inp = input_url_or_path.strip()
-    # local path?
-    if os.path.exists(inp) and os.path.isfile(inp):
-        return os.path.abspath(inp), None
-    if not _is_remote(inp):
-        return None, f"Input not a file and not a URL: {inp}"
 
+    inp = input_path_or_url.strip()
+
+    # If local file exists, use it directly.
+    if os.path.isfile(inp):
+        return os.path.abspath(inp), None
+
+    # If not a URL, fail quickly.
+    if not _is_url(inp):
+        return None, f"Not a file and not a URL: {inp}"
+
+    # Prepare simple yt-dlp command to fetch best audio (one attempt)
     ts = int(time.time())
     out_template = os.path.join(out_dir, f"audio_input_{ts}.%(ext)s")
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    base_cmd = [
+    cmd = [
         "yt-dlp",
         "-f", "bestaudio[ext=m4a]/bestaudio/best",
-        "--extractor-args", "youtube:player_client=default",
         "--output", out_template,
         "--restrict-filenames",
-        "--no-warnings",
-        "--no-check-certificate",
-        "--user-agent", user_agent
+        inp
     ]
 
-    attempt = 0
-    last_err = None
-    while attempt <= max_retries:
-        attempt += 1
-        try:
-            proc = subprocess.run(base_cmd + [inp], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-            stderr = proc.stderr.decode(errors="ignore")
-            if proc.returncode == 0:
-                found = _newest_audio_file_in_dir(out_dir, prefix="audio_input_")
-                if found:
-                    return found, None
-                last_err = "yt-dlp finished but produced no file."
-                break
-            else:
-                if "HTTP Error 403" in stderr or "403 Forbidden" in stderr:
-                    last_err = ("HTTP 403 Forbidden from remote host. YouTube may block automated downloads or require a JS runtime.")
-                    break
-                last_err = stderr.splitlines()[-8:]
-        except FileNotFoundError:
-            last_err = "yt-dlp not found in environment."
-            break
-        except subprocess.TimeoutExpired:
-            last_err = f"Download timed out after {timeout}s."
-        except Exception as e:
-            last_err = f"Unexpected error: {e}"
-        time.sleep(1 + attempt)
-    # fallback: find any recent audio_input_* file
-    fallback = _newest_audio_file_in_dir(out_dir, prefix="audio_input_")
-    if fallback:
-        return fallback, None
-    return None, (last_err or "Unknown download error.")
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        stderr = proc.stderr.decode(errors="ignore")
+        if proc.returncode != 0:
+            if "403" in stderr or "403 Forbidden" in stderr:
+                return None, "HTTP 403: remote host blocked the download."
+            return None, f"yt-dlp failed: {stderr.splitlines()[-5:]}"
+        # find the produced audio file
+        found = _find_newest_audio(out_dir)
+        if found:
+            return os.path.abspath(found), None
+        return None, "yt-dlp finished but no audio file found."
+    except FileNotFoundError:
+        return None, "yt-dlp not installed. Install yt-dlp for URL downloads."
+    except subprocess.TimeoutExpired:
+        return None, f"Download timed out after {timeout} seconds."
+    except Exception as e:
+        return None, f"Unexpected error: {e}"

@@ -1,4 +1,3 @@
-# utils/analysis_local_llm.py — minimal deterministic analyzer
 import re
 
 def _tokenize_words(text):
@@ -64,7 +63,6 @@ def generate_short_summary_local(text, max_sentences=2):
     sents = _split_sentences(text)
     if not sents:
         return ""
-    # simple: pick the top-frequency sentences by content words
     freq = {}
     for w in _tokenize_words(text):
         if w in _STOP or len(w) < 3:
@@ -84,7 +82,6 @@ def generate_short_summary_local(text, max_sentences=2):
             continue
         chosen.append(s)
     if not chosen:
-        # fallback: first two reasonable sentences
         out = []
         for s in sents:
             if len(_tokenize_words(s)) >= 6:
